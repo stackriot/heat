@@ -21,6 +21,7 @@ import string
 from urllib import parse as urlparse
 
 from neutronclient.common import exceptions as q_exceptions
+import novaclient
 from novaclient import api_versions
 from novaclient import client as nc
 from novaclient import exceptions
@@ -95,7 +96,13 @@ class NovaClientPlugin(microversion_mixin.MicroversionMixin,
     def get_max_microversion(self):
         if not self.max_microversion:
             client = self._create()
-            self.max_microversion = client.versions.get_current().version
+            current_version = client.versions.get_current().version
+            # TODO(tkajinam): Make sure that the version is supported by
+            # novaclient. We should consider replacing it by openstacksdk to
+            # remove this cap.
+            self.max_microversion = min(
+                api_versions.get_api_version(current_version),
+                novaclient.API_MAX_VERSION).get_string()
         return self.max_microversion
 
     def is_version_supported(self, version):
