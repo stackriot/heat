@@ -73,8 +73,10 @@ class CinderClientPlugin(microversion_mixin.MicroversionMixin,
 
     def get_max_microversion(self):
         if not self.max_microversion:
-            self.max_microversion = api_versions.get_highest_version(
-                self._create()).get_string()
+            current_version = api_versions.get_highest_version(self._create())
+            self.max_microversion = min(
+                api_versions.APIVersion(api_versions.MAX_VERSION),
+                current_version).get_string()
         return self.max_microversion
 
     def is_version_supported(self, version):
