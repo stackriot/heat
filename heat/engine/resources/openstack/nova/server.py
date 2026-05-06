@@ -488,7 +488,8 @@ class Server(server_base.BaseServer, sh.SchedulerHintsMixin,
                           'Used only if port property is not specified '
                           'for creating port.'),
                         schema=neutron_port.Port.extra_properties_schema,
-                        support_status=support.SupportStatus(version='6.0.0')
+                        support_status=support.SupportStatus(version='6.0.0'),
+                        update_allowed=True
                     ),
                     NETWORK_SUBNET: properties.Schema(
                         properties.Schema.STRING,

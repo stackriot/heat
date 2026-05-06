@@ -4885,6 +4885,473 @@ class ServerInternalPortTest(ServersTest):
         self.assertFalse(self.port_create.called)
         self.assertFalse(data_set.called)
 
+    def test_build_nics_create_internal_port_with_port_extra(self):
+        tmpl = """
+        heat_template_version: 2015-10-15
+        resources:
+          server:
+            type: OS::Nova::Server
+            properties:
+              flavor: m1.small
+              image: F17-x86_64-gold
+              networks:
+                - network: 4321
+                  port_extra_properties:
+                    port_security_enabled: false
+        """
+        t, stack, server = self._return_template_stack_and_rsrc_defn('test',
+                                                                     tmpl)
+        self.patchobject(server, '_validate_belonging_subnet_to_net')
+        self.port_create.return_value = {'port': {'id': '111222'}}
+        data_set = self.patchobject(resource.Resource, 'data_set')
+
+        network = [{'network': '4321',
+                    'port_extra_properties': {
+                        'value_specs': {},
+                        'port_security_enabled': False
+                    }}]
+        nics = server._build_nics(network)
+
+        self.assertEqual([{'port-id': '111222', 'net-id': '4321'}], nics)
+        self.port_create.assert_called_once_with(
+            {'port': {'name': 'server-port-0',
+                      'network_id': '4321',
+                      'port_security_enabled': False}})
+        data_set.assert_called_once_with('internal_ports',
+                                         '[{"id": "111222"}]')
+
+    def test_calculate_networks_internal_ports_with_port_extra(self):
+        tmpl = """
+        heat_template_version: 2015-10-15
+        resources:
+          server:
+            type: OS::Nova::Server
+            properties:
+              flavor: m1.small
+              image: F17-x86_64-gold
+              networks:
+                - network: 4321
+                  port_extra_properties:
+                    port_security_enabled: false
+        """
+
+        t, stack, server = self._return_template_stack_and_rsrc_defn(
+            'test', tmpl)
+        data_mock = self.patchobject(server, '_data_get_ports')
+        data_mock.side_effect = [[], []]
+        self.port_create.return_value = {'port': {'id': '111222'}}
+        data_set = self.patchobject(resource.Resource, 'data_set')
+
+        old_net = []
+        new_net = [{'network': '4321',
+                    'port_extra_properties': {
+                        'value_specs': {},
+                        'port_security_enabled': False
+                    }}]
+        interfaces = []
+
+        server.calculate_networks(old_net, new_net, interfaces)
+
+        self.port_create.assert_called_once_with(
+            {'port': {'name': 'server-port-0',
+                      'network_id': '4321',
+                      'port_security_enabled': False}})
+        data_set.assert_called_once_with('internal_ports',
+                                         '[{"id": "111222"}]')
+
+    def test_calculate_networks_update_port_extra_properties(self):
+        tmpl = """
+        heat_template_version: 2015-10-15
+        resources:
+          server:
+            type: OS::Nova::Server
+            properties:
+              flavor: m1.small
+              image: F17-x86_64-gold
+              networks:
+                - network: 4321
+                  port_extra_properties:
+                    port_security_enabled: false
+        """
+
+        t, stack, server = self._return_template_stack_and_rsrc_defn(
+            'test', tmpl)
+        data_mock = self.patchobject(server, '_data_get_ports')
+        data_mock.return_value = [{'id': 'old-port-id'}]
+        self.patchobject(resource.Resource, 'data_set')
+        mock_update_port = self.patchobject(
+            neutronclient.Client, 'update_port')
+
+        old_net = [self.create_old_net(
+            net='4321',
+            port_extra_properties={
+                'value_specs': {},
+                'port_security_enabled': False})]
+        new_net = [{'network': '4321',
+                    'port_extra_properties': {
+                        'value_specs': {},
+                        'port_security_enabled': True
+                    }}]
+        ifaces = [create_fake_iface(
+            port='old-port-id',
+            net='4321',
+            ip='10.0.0.5',
+            subnet='sub-1234')]
+
+        remove_ports, add_nets = server.calculate_networks(
+            old_net, new_net, ifaces)
+
+        # Port updated in-place, not detached/deleted/created
+        self.assertEqual([], remove_ports)
+        self.port_delete.assert_not_called()
+        self.port_create.assert_not_called()
+        mock_update_port.assert_called_once_with(
+            'old-port-id',
+            {'port': {'port_security_enabled': True}})
+        self.assertEqual([], add_nets)
+
+    def test_calculate_networks_update_non_updatable_port_extra(self):
+        tmpl = """
+        heat_template_version: 2015-10-15
+        resources:
+          server:
+            type: OS::Nova::Server
+            properties:
+              flavor: m1.small
+              image: F17-x86_64-gold
+              networks:
+                - network: 4321
+                  port_extra_properties:
+                    port_security_enabled: false
+        """
+
+        t, stack, server = self._return_template_stack_and_rsrc_defn(
+            'test', tmpl)
+        data_mock = self.patchobject(server, '_data_get_ports')
+        data_mock.return_value = [{'id': 'old-port-id'}]
+        self.port_create.return_value = {'port': {'id': 'new-port-id'}}
+        self.patchobject(resource.Resource, 'data_set')
+        mock_update_port = self.patchobject(
+            neutronclient.Client, 'update_port')
+
+        old_net = [self.create_old_net(
+            net='4321',
+            port_extra_properties={
+                'value_specs': {},
+                'port_security_enabled': False})]
+        new_net = [{'network': '4321',
+                    'port_extra_properties': {
+                        'value_specs': {},
+                        'port_security_enabled': False,
+                        'mac_address': '00:00:00:00:00:01'
+                    }}]
+        ifaces = [create_fake_iface(
+            port='old-port-id',
+            net='4321',
+            ip='10.0.0.5',
+            subnet='sub-1234')]
+
+        remove_ports, add_nets = server.calculate_networks(
+            old_net, new_net, ifaces)
+
+        # mac_address has no update_allowed, so port must be replaced
+        # via detach/attach, not updated in-place
+        self.assertIn('old-port-id', remove_ports)
+        self.port_delete.assert_called_once_with('old-port-id')
+        mock_update_port.assert_not_called()
+        self.port_create.assert_called_once_with(
+            {'port': {'name': 'server-port-0',
+                      'network_id': '4321',
+                      'port_security_enabled': False,
+                      'mac_address': '00:00:00:00:00:01'}})
+        self.assertEqual([{'port_id': 'new-port-id',
+                           'net_id': None,
+                           'fip': None}], add_nets)
+
+    def test_calculate_networks_add_port_extra_to_nova_port(self):
+        tmpl = """
+        heat_template_version: 2015-10-15
+        resources:
+          server:
+            type: OS::Nova::Server
+            properties:
+              flavor: m1.small
+              image: F17-x86_64-gold
+              networks:
+                - network: 4321
+        """
+
+        t, stack, server = self._return_template_stack_and_rsrc_defn(
+            'test', tmpl)
+        data_mock = self.patchobject(server, '_data_get_ports')
+        data_mock.return_value = []
+        self.port_create.return_value = {'port': {'id': 'new-port-id'}}
+        self.patchobject(resource.Resource, 'data_set')
+        mock_update_port = self.patchobject(
+            neutronclient.Client, 'update_port')
+
+        old_net = [self.create_old_net(net='4321')]
+        new_net = [{'network': '4321',
+                    'port_extra_properties': {
+                        'value_specs': {},
+                        'port_security_enabled': False
+                    }}]
+        ifaces = [create_fake_iface(
+            port='nova-port-id',
+            net='4321',
+            ip='10.0.0.5',
+            subnet='sub-1234')]
+
+        remove_ports, add_nets = server.calculate_networks(
+            old_net, new_net, ifaces)
+
+        # Port is Nova-owned (not in internal_ports), so in-place
+        # update is not possible. Must detach/attach.
+        self.assertIn('nova-port-id', remove_ports)
+        mock_update_port.assert_not_called()
+        self.port_create.assert_called_once_with(
+            {'port': {'name': 'server-port-0',
+                      'network_id': '4321',
+                      'port_security_enabled': False}})
+        self.assertEqual([{'port_id': 'new-port-id',
+                           'net_id': None,
+                           'fip': None}], add_nets)
+
+    def test_calculate_networks_remove_port_extra_properties(self):
+        tmpl = """
+        heat_template_version: 2015-10-15
+        resources:
+          server:
+            type: OS::Nova::Server
+            properties:
+              flavor: m1.small
+              image: F17-x86_64-gold
+              networks:
+                - network: 4321
+                  port_extra_properties:
+                    port_security_enabled: false
+        """
+
+        t, stack, server = self._return_template_stack_and_rsrc_defn(
+            'test', tmpl)
+        data_mock = self.patchobject(server, '_data_get_ports')
+        data_mock.return_value = [{'id': 'old-port-id'}]
+        self.patchobject(resource.Resource, 'data_set')
+
+        old_net = [self.create_old_net(
+            net='4321',
+            port_extra_properties={
+                'value_specs': {},
+                'port_security_enabled': False})]
+        # Update removes port_extra_properties entirely
+        new_net = [{'network': '4321'}]
+        ifaces = [create_fake_iface(
+            port='old-port-id',
+            net='4321',
+            ip='10.0.0.5',
+            subnet='sub-1234')]
+
+        remove_ports, add_nets = server.calculate_networks(
+            old_net, new_net, ifaces)
+
+        # Old internal port should be detached and deleted
+        self.assertIn('old-port-id', remove_ports)
+        self.port_delete.assert_called_once_with('old-port-id')
+        # New network attached without internal port (Nova picks port)
+        self.assertEqual([{'port_id': None,
+                           'net_id': '4321',
+                           'fip': None}], add_nets)
+
+    def test_net_is_subset_with_unhashable_values(self):
+        """Test _net_is_subset handles dict values without TypeError."""
+        tmpl = """
+        heat_template_version: 2015-10-15
+        resources:
+          server:
+            type: OS::Nova::Server
+            properties:
+              flavor: m1.small
+              image: F17-x86_64-gold
+              networks:
+                - network: 4321
+        """
+        t, stack, server = self._return_template_stack_and_rsrc_defn(
+            'test', tmpl)
+
+        # Subset with dict value (would crash with set-based comparison)
+        subset = {'network': '4321',
+                  'port_extra_properties': {
+                      'port_security_enabled': False}}
+        superset = {'network': '4321',
+                    'port': 'port-1234',
+                    'port_extra_properties': {
+                        'port_security_enabled': False}}
+        self.assertTrue(server._net_is_subset(subset, superset))
+
+        # Dict values differ — not a subset
+        different = {'network': '4321',
+                     'port_extra_properties': {
+                         'port_security_enabled': True}}
+        self.assertFalse(server._net_is_subset(different, superset))
+
+        # Key missing from superset — not a subset
+        superset_no_extra = {'network': '4321',
+                             'port': 'port-1234'}
+        self.assertFalse(
+            server._net_is_subset(subset, superset_no_extra))
+
+        # Empty subset is always a subset
+        self.assertTrue(server._net_is_subset({}, superset))
+
+        # Subset with list value (also unhashable)
+        subset_list = {'network': '4321',
+                       'port_extra_properties': {
+                           'allowed_address_pairs': [
+                               {'ip_address': '10.0.0.1'}]}}
+        superset_list = {'network': '4321',
+                         'port_extra_properties': {
+                             'allowed_address_pairs': [
+                                 {'ip_address': '10.0.0.1'}]}}
+        self.assertTrue(
+            server._net_is_subset(subset_list, superset_list))
+
+    def test_find_best_match_with_port_extra_properties(self):
+        """Test _find_best_match with port_extra_properties dicts."""
+        tmpl = """
+        heat_template_version: 2015-10-15
+        resources:
+          server:
+            type: OS::Nova::Server
+            properties:
+              flavor: m1.small
+              image: F17-x86_64-gold
+              networks:
+                - network: 4321
+        """
+        t, stack, server = self._return_template_stack_and_rsrc_defn(
+            'test', tmpl)
+
+        existing = [
+            {'port': None, 'network': '4321', 'fixed_ip': None,
+             'subnet': None, 'uuid': None, 'floating_ip': None,
+             'port_extra_properties': {
+                 'value_specs': {},
+                 'port_security_enabled': False},
+             'allocate_network': None, 'tag': None},
+            {'port': None, 'network': '9999', 'fixed_ip': None,
+             'subnet': None, 'uuid': None, 'floating_ip': None,
+             'port_extra_properties': None,
+             'allocate_network': None, 'tag': None},
+        ]
+
+        # Match: same network and same port_extra_properties
+        specified_same = {'network': '4321',
+                          'port_extra_properties': {
+                              'value_specs': {},
+                              'port_security_enabled': False}}
+        result = server._find_best_match(existing, specified_same)
+        self.assertEqual(existing[0], result)
+
+        # No match: same network but different port_extra_properties
+        specified_diff = {'network': '4321',
+                          'port_extra_properties': {
+                              'value_specs': {},
+                              'port_security_enabled': True}}
+        result = server._find_best_match(existing, specified_diff)
+        self.assertIsNone(result)
+
+        # Match: network without port_extra_properties matches
+        # second interface (subset check passes since specified
+        # has no port_extra_properties key)
+        specified_no_extra = {'network': '9999'}
+        result = server._find_best_match(existing, specified_no_extra)
+        self.assertEqual(existing[1], result)
+
+    def test_can_update_internal_port(self):
+        tmpl = """
+        heat_template_version: 2015-10-15
+        resources:
+          server:
+            type: OS::Nova::Server
+            properties:
+              flavor: m1.small
+              image: F17-x86_64-gold
+              networks:
+                - network: 4321
+        """
+        t, stack, server = self._return_template_stack_and_rsrc_defn(
+            'test', tmpl)
+
+        # All changed properties have update_allowed=True
+        self.assertTrue(server._can_update_internal_port(
+            {'value_specs': {}, 'port_security_enabled': False},
+            {'value_specs': {}, 'port_security_enabled': True}))
+
+        # mac_address has no update_allowed — returns False
+        self.assertFalse(server._can_update_internal_port(
+            {'value_specs': {}},
+            {'value_specs': {}, 'mac_address': '00:00:00:00:00:01'}))
+
+        # Removing port_extra entirely — returns False
+        self.assertFalse(server._can_update_internal_port(
+            {'value_specs': {}, 'port_security_enabled': False},
+            None))
+
+        # No changes — returns True
+        self.assertTrue(server._can_update_internal_port(
+            {'value_specs': {}, 'port_security_enabled': False},
+            {'value_specs': {}, 'port_security_enabled': False}))
+
+        # Adding port_extra for the first time — all updatable
+        self.assertTrue(server._can_update_internal_port(
+            None,
+            {'value_specs': {}, 'port_security_enabled': False}))
+
+    def test_validate_network_floating_ip_with_port_extra(self):
+        tmpl = """
+        heat_template_version: 2015-10-15
+        resources:
+          server:
+            type: OS::Nova::Server
+            properties:
+              flavor: m1.small
+              image: F17-x86_64-gold
+              networks:
+                - network: 4321
+                  floating_ip: floatingip-1234
+                  port_extra_properties:
+                    port_security_enabled: false
+        """
+        t, stack, server = self._return_template_stack_and_rsrc_defn(
+            'test', tmpl)
+        networks = server.properties['networks']
+        for network in networks:
+            # Should not raise: port_extra_properties means Heat
+            # creates an internal port, so floating_ip can be
+            # associated.
+            server._validate_network(network)
+
+    def test_validate_network_floating_ip_without_port_extra(self):
+        tmpl = """
+        heat_template_version: 2015-10-15
+        resources:
+          server:
+            type: OS::Nova::Server
+            properties:
+              flavor: m1.small
+              image: F17-x86_64-gold
+              networks:
+                - network: 4321
+                  floating_ip: floatingip-1234
+        """
+        t, stack, server = self._return_template_stack_and_rsrc_defn(
+            'test', tmpl)
+        networks = server.properties['networks']
+        # Should raise: network-only with floating_ip but no
+        # port_extra or subnet means no Heat-managed port exists.
+        self.assertRaises(exception.StackValidationFailed,
+                          server._validate_network, networks[0])
+
     def test_prepare_port_kwargs_with_extras(self):
         tmpl = """
         heat_template_version: 2015-10-15
@@ -4992,7 +5459,8 @@ class ServerInternalPortTest(ServersTest):
         t, stack, server = self._return_template_stack_and_rsrc_defn('test',
                                                                      tmpl)
         data_mock = self.patchobject(server, '_data_get_ports')
-        data_mock.side_effect = [[{"id": "1122"}], [{"id": "1122"}], []]
+        data_mock.side_effect = [[{"id": "1122"}], [{"id": "1122"}],
+                                 [{"id": "1122"}], []]
         self.port_create.return_value = {'port': {'id': '7788'}}
         data_set = self.patchobject(resource.Resource, 'data_set')
 

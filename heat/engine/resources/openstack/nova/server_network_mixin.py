@@ -11,6 +11,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import copy
 import itertools
 import time
 
@@ -68,7 +69,9 @@ class ServerNetworkMixin(object):
         # can't be associated as the neutron port isn't created/managed
         # by heat
         if floating_ip is not None:
-            if net_id is not None and port is None and subnet is None:
+            if (net_id is not None and port is None
+                    and subnet is None
+                    and not network.get(self.NETWORK_PORT_EXTRA)):
                 msg = _('Property "%(fip)s" is not supported if only '
                         '"%(net)s" is specified, because the corresponding '
                         'port can not be retrieved.'
@@ -108,6 +111,68 @@ class ServerNetworkMixin(object):
 
         return port['id']
 
+    def _update_internal_port(self, port_id, extra_props):
+        """Update an internal port's extra properties in-place."""
+        kwargs = self._build_port_extra_kwargs(extra_props)
+        if kwargs:
+            self.client('neutron').update_port(port_id, {'port': kwargs})
+
+    @staticmethod
+    def _can_update_internal_port(old_extra_props, new_extra_props):
+        """Check if port_extra_properties change supports in-place update.
+
+        Compares old and new port_extra_properties and checks each
+        changed key against the Port extra_properties_schema. Returns
+        True if all changed properties have update_allowed=True.
+        """
+        # Removing port_extra entirely changes the port ownership
+        # semantics, requires replacement via detach/attach.
+        if new_extra_props is None:
+            return False
+
+        old_extras = old_extra_props or {}
+        all_keys = set(old_extras.keys()) | set(new_extra_props.keys())
+        schema = neutron_port.Port.extra_properties_schema
+
+        for key in all_keys:
+            if old_extras.get(key) != new_extra_props.get(key):
+                prop_schema = schema.get(key)
+                if prop_schema is None or not prop_schema.update_allowed:
+                    return False
+        return True
+
+    @staticmethod
+    def _build_port_extra_kwargs(extra_props):
+        """Build Neutron port kwargs from port_extra_properties."""
+        if extra_props is None:
+            return {}
+
+        extra_props = copy.deepcopy(extra_props)
+        kwargs = {}
+        specs = extra_props.pop(neutron_port.Port.VALUE_SPECS, None)
+        if specs:
+            kwargs.update(specs)
+        port_extra_keys = list(neutron_port.Port.EXTRA_PROPERTIES)
+        port_extra_keys.remove(neutron_port.Port.ALLOWED_ADDRESS_PAIRS)
+        port_extra_keys.remove(neutron_port.Port.NO_FIXED_IPS)
+        for key in port_extra_keys:
+            if extra_props.get(key) is not None:
+                kwargs[key] = extra_props.get(key)
+
+        allowed_address_pairs = extra_props.get(
+            neutron_port.Port.ALLOWED_ADDRESS_PAIRS)
+        if allowed_address_pairs is not None:
+            for pair in allowed_address_pairs:
+                if (neutron_port.Port.ALLOWED_ADDRESS_PAIR_MAC_ADDRESS
+                    in pair and pair.get(
+                        neutron_port.Port.ALLOWED_ADDRESS_PAIR_MAC_ADDRESS)
+                        is None):
+                    del pair[
+                        neutron_port.Port.ALLOWED_ADDRESS_PAIR_MAC_ADDRESS]
+            port_address_pairs = neutron_port.Port.ALLOWED_ADDRESS_PAIRS
+            kwargs[port_address_pairs] = allowed_address_pairs
+        return kwargs
+
     def _prepare_internal_port_kwargs(self, net_data, security_groups=None):
         kwargs = {'network_id': self._get_network_id(net_data)}
         fixed_ip = net_data.get(self.NETWORK_FIXED_IP)
@@ -128,30 +193,8 @@ class ServerNetworkMixin(object):
                 'neutron').get_secgroup_uuids(security_groups)
             kwargs['security_groups'] = sec_uuids
 
-        extra_props = net_data.get(self.NETWORK_PORT_EXTRA)
-        if extra_props is not None:
-            specs = extra_props.pop(neutron_port.Port.VALUE_SPECS)
-            if specs:
-                kwargs.update(specs)
-            port_extra_keys = list(neutron_port.Port.EXTRA_PROPERTIES)
-            port_extra_keys.remove(neutron_port.Port.ALLOWED_ADDRESS_PAIRS)
-            port_extra_keys.remove(neutron_port.Port.NO_FIXED_IPS)
-            for key in port_extra_keys:
-                if extra_props.get(key) is not None:
-                    kwargs[key] = extra_props.get(key)
-
-            allowed_address_pairs = extra_props.get(
-                neutron_port.Port.ALLOWED_ADDRESS_PAIRS)
-            if allowed_address_pairs is not None:
-                for pair in allowed_address_pairs:
-                    if (neutron_port.Port.ALLOWED_ADDRESS_PAIR_MAC_ADDRESS
-                        in pair and pair.get(
-                            neutron_port.Port.ALLOWED_ADDRESS_PAIR_MAC_ADDRESS)
-                            is None):
-                        del pair[
-                            neutron_port.Port.ALLOWED_ADDRESS_PAIR_MAC_ADDRESS]
-                port_address_pairs = neutron_port.Port.ALLOWED_ADDRESS_PAIRS
-                kwargs[port_address_pairs] = allowed_address_pairs
+        kwargs.update(self._build_port_extra_kwargs(
+            net_data.get(self.NETWORK_PORT_EXTRA)))
 
         return kwargs
 
@@ -227,7 +270,8 @@ class ServerNetworkMixin(object):
             nic_info = {'net-id': self._get_network_id(net)}
             if net.get(self.NETWORK_PORT):
                 nic_info['port-id'] = net[self.NETWORK_PORT]
-            elif net.get(self.NETWORK_SUBNET):
+            elif (net.get(self.NETWORK_SUBNET) or
+                  net.get(self.NETWORK_PORT_EXTRA)):
                 nic_info['port-id'] = self._create_internal_port(
                     net, idx, security_groups)
 
@@ -264,27 +308,42 @@ class ServerNetworkMixin(object):
             self.client('neutron').update_floatingip(
                 floating_ip, {'floatingip': {'port_id': None}})
 
+    @staticmethod
+    def _net_is_subset(subset_dict, superset_dict):
+        """Check if subset_dict is a subset of superset_dict.
+
+        Uses direct dict comparison instead of set operations
+        to support unhashable value types such as dicts
+        (e.g. port_extra_properties).
+        """
+        return all(k in superset_dict and superset_dict[k] == v
+                   for k, v in subset_dict.items())
+
+    @staticmethod
+    def _net_matching_items(specified_net, iface):
+        """Count matching key-value pairs between two dicts."""
+        return sum(1 for k, v in specified_net.items()
+                   if k in iface and iface[k] == v)
+
     def _find_best_match(self, existing_interfaces, specified_net):
-        specified_net_items = set(specified_net.items())
         if specified_net.get(self.NETWORK_PORT) is not None:
             for iface in existing_interfaces:
                 if (iface[self.NETWORK_PORT] ==
                         specified_net[self.NETWORK_PORT] and
-                        specified_net_items.issubset(set(iface.items()))):
+                        self._net_is_subset(specified_net, iface)):
                     return iface
         elif specified_net.get(self.NETWORK_FIXED_IP) is not None:
             for iface in existing_interfaces:
                 if (iface[self.NETWORK_FIXED_IP] ==
                         specified_net[self.NETWORK_FIXED_IP] and
-                        specified_net_items.issubset(set(iface.items()))):
+                        self._net_is_subset(specified_net, iface)):
                     return iface
         else:
             # Best subset intersection
             best, matches, num = None, 0, 0
             for iface in existing_interfaces:
-                iface_items = set(iface.items())
-                if specified_net_items.issubset(iface_items):
-                    num = len(specified_net_items.intersection(iface_items))
+                if self._net_is_subset(specified_net, iface):
+                    num = self._net_matching_items(specified_net, iface)
                 if num > matches:
                     best, matches = iface, num
             return best
@@ -300,6 +359,8 @@ class ServerNetworkMixin(object):
             for _net in itertools.chain(new_nets, old_nets):
                 _net[key] = _net.get(key) or None
 
+        inter_port_ids = [p['id'] for p in self._data_get_ports()]
+
         for new_net in list(new_nets):
             new_net_reduced = {k: v for k, v in new_net.items()
                                if k not in self._IFACE_MANAGED_KEYS or
@@ -309,6 +370,41 @@ class ServerNetworkMixin(object):
                 not_updated_nets.append(match)
                 new_nets.remove(new_net)
                 old_nets.remove(match)
+                continue
+
+            # No exact match - try matching without port_extra_properties
+            # to detect cases where only port_extra changed on the same
+            # network identity (network, subnet, fixed_ip).
+            new_net_no_extras = {k: v for k, v in new_net_reduced.items()
+                                 if k != self.NETWORK_PORT_EXTRA}
+            match = self._find_best_match(old_nets, new_net_no_extras)
+            if match is None:
+                continue
+
+            port_id = match.get(self.NETWORK_PORT)
+
+            # Only attempt in-place update for Heat-owned internal
+            # ports. Ports created by Nova or external to Heat require
+            # detach/attach replacement.
+            if not port_id or port_id not in inter_port_ids:
+                continue
+
+            old_extra_props = match.get(self.NETWORK_PORT_EXTRA)
+            new_extra_props = new_net.get(self.NETWORK_PORT_EXTRA)
+            if self._can_update_internal_port(
+                    old_extra_props, new_extra_props):
+                self._update_internal_port(port_id, new_extra_props)
+                not_updated_nets.append(match)
+                new_nets.remove(new_net)
+                old_nets.remove(match)
+            else:
+                # One or more extra_properties have changed that
+                # do not support in-place update, so port will
+                # be replaced by detach/attach.
+                LOG.info("Port %(port)s requires replacement: "
+                         "port_extra_properties contain changes "
+                         "that do not support in-place update.",
+                         {'port': port_id})
 
         return not_updated_nets
 
@@ -473,7 +569,8 @@ class ServerNetworkMixin(object):
 
                 if net.get(self.NETWORK_PORT):
                     handler_kwargs['port_id'] = net.get(self.NETWORK_PORT)
-                elif net.get(self.NETWORK_SUBNET):
+                elif (net.get(self.NETWORK_SUBNET) or
+                      net.get(self.NETWORK_PORT_EXTRA)):
                     handler_kwargs['port_id'] = self._create_internal_port(
                         net, idx, security_groups)
 

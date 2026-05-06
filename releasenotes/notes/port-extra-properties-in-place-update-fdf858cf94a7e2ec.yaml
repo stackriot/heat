@@ -1,0 +1,14 @@
+---
+features:
+  - |
+    ``port_extra_properties`` on ``OS::Nova::Server`` networks now
+    supports in-place updates where possible, avoiding unnecessary
+    port detach/attach cycles.
+fixes:
+  - |
+    Fixed ``port_extra_properties`` being silently ignored when only
+    network (no subnet) was specified in ``OS::Nova::Server``.
+  - |
+    Fixed ``TypeError: unhashable type: 'dict'`` during stack updates
+    when ``port_extra_properties`` contained dict-valued properties
+    such as ``allowed_address_pairs``.
