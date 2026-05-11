@@ -16,9 +16,6 @@
       - openstack/heat-tempest-plugin
       - openstack/octavia
       - openstack/neutron
-      - openstack/oslo.messaging
-      - openstack/python-barbicanclient
-      - openstack/python-heatclient
       - openstack/heat-agents
       - openstack/tempest
     vars:
