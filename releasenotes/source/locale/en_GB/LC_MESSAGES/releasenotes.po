@@ -11,11 +11,11 @@ msgid ""
 msgstr ""
 "Project-Id-Version: openstack-heat\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-09-11 17:19+0000\n"
+"POT-Creation-Date: 2026-09-24 17:37+0000\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"PO-Revision-Date: 2026-08-08 09:53+0000\n"
+"PO-Revision-Date: 2026-09-24 07:34+0000\n"
 "Last-Translator: Andi Chandler <andi@gowling.com>\n"
 "Language-Team: English (United Kingdom)\n"
 "Language: en_GB\n"
@@ -176,6 +176,12 @@ msgstr "2025.1 Series Release Notes"
 msgid "2025.2 Series Release Notes"
 msgstr "2025.2 Series Release Notes"
 
+msgid "2026.1 Series Release Notes"
+msgstr "2026.1 Series Release Notes"
+
+msgid "2026.2 Series Release Notes"
+msgstr "2026.2 Series Release Notes"
+
 msgid "21.0.0"
 msgstr "21.0.0"
 
@@ -208,6 +214,12 @@ msgstr "26.0.0"
 
 msgid "26.0.1"
 msgstr "26.0.1"
+
+msgid "27.0.0.0rc1"
+msgstr "27.0.0.0rc1"
+
+msgid "27.0.0.0rc1-12"
+msgstr "27.0.0.0rc1-12"
 
 msgid "5.0.1"
 msgstr "5.0.1"
@@ -3173,6 +3185,24 @@ msgstr "You can now use:"
 msgid "Zed Series Release Notes"
 msgstr "Zed Series Release Notes"
 
+msgid "``AWS::CloudFormation::WaitConditionHandle``"
+msgstr "``AWS::CloudFormation::WaitConditionHandle``"
+
+msgid "``AWS::CloudFormation::WaitCondition``"
+msgstr "``AWS::CloudFormation::WaitCondition``"
+
+msgid "``AWS::EC2::EIPAssociation``"
+msgstr "``AWS::EC2::EIPAssociation``"
+
+msgid "``AWS::EC2::EIP``"
+msgstr "``AWS::EC2::EIP``"
+
+msgid "``AWS::EC2::Instance``"
+msgstr "``AWS::EC2::Instance``"
+
+msgid "``AWS::EC2::InternetGateway``"
+msgstr "``AWS::EC2::InternetGateway``"
+
 msgid ""
 "``OS::Manila::Share`` attribute ``export_locations`` will now be a list of "
 "export paths"
@@ -3285,6 +3315,12 @@ msgstr "``ca_file``: Use ``cafile``"
 msgid "``cert_file``: Use ``certfile``"
 msgstr "``cert_file``: Use ``certfile``"
 
+msgid "``heat-wsgi-api``"
+msgstr "``heat-wsgi-api``"
+
+msgid "``key_file``"
+msgstr "``key_file``"
+
 msgid "``key_file``: Use ``keyfile``"
 msgstr "``key_file``: Use ``keyfile``"
 
@@ -3307,6 +3343,13 @@ msgstr ""
 "use ``user_data`` or ``metadata`` instead. If that property really required, "
 "use config ``max_nova_api_microversion`` to set the maximum nova API "
 "microversion <2.57 for Nova client plugin to support personality property."
+
+msgid ""
+"``port_extra_properties`` on ``OS::Nova::Server`` networks now supports in-"
+"place updates where possible, avoiding unnecessary port detach/attach cycles."
+msgstr ""
+"``port_extra_properties`` on ``OS::Nova::Server`` networks now supports in-"
+"place updates where possible, avoiding unnecessary port detach/attach cycles."
 
 msgid ""
 "cinder.qos_specs constraint added to support to validate QoS Specs attribute."
